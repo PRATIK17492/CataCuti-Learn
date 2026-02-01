@@ -28,26 +28,42 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-# Initialize database
+# Initialize database with schema migration support
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
     
-    # Create tables
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            name TEXT,
-            user_class TEXT,
-            gender TEXT,
-            school TEXT,
-            role TEXT DEFAULT 'student',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+    # First, check if tables exist and what columns they have
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+    if cursor.fetchone():
+        # Table exists, check for columns
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        # Add missing columns
+        if 'gender' not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN gender TEXT")
+        if 'school' not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN school TEXT")
+        if 'user_class' not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN user_class TEXT")
+    else:
+        # Create users table from scratch
+        cursor.execute('''
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                name TEXT,
+                user_class TEXT,
+                gender TEXT,
+                school TEXT,
+                role TEXT DEFAULT 'student',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
     
+    # Create other tables if they don't exist
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS content (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -228,8 +244,8 @@ def login():
             'id': user['id'],
             'email': user['email'],
             'name': user['name'],
-            'class': user['user_class'],
-            'school': user['school'],
+            'class': user['user_class'] if 'user_class' in user.keys() else '',
+            'school': user['school'] if 'school' in user.keys() else '',
             'role': user['role']
         }
         
@@ -520,8 +536,8 @@ def get_admin_users():
                 'id': user['id'],
                 'email': user['email'],
                 'name': user['name'],
-                'class': user['user_class'],
-                'school': user['school'],
+                'class': user.get('user_class', ''),
+                'school': user.get('school', ''),
                 'role': user['role'],
                 'created_at': user['created_at']
             })
