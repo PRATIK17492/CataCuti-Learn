@@ -91,12 +91,12 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM users")
     if cursor.fetchone()[0] == 0:
         cursor.execute(
-            "INSERT INTO users (email, password, name, user_class, role) VALUES (?, ?, ?, ?, ?)",
-            ("admin@catacuti.com", generate_password_hash("admin123"), "Admin User", "Administrator", "admin")
+            "INSERT INTO users (email, password, name, user_class, gender, school, role) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("admin@catacuti.com", generate_password_hash("admin123"), "Admin User", "Administrator", "male", "CataCuti Admin School", "admin")
         )
         cursor.execute(
-            "INSERT INTO users (email, password, name, user_class, role) VALUES (?, ?, ?, ?, ?)",
-            ("student@catacuti.com", generate_password_hash("student123"), "Test Student", "10th Grade", "student")
+            "INSERT INTO users (email, password, name, user_class, gender, school, role) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("student@catacuti.com", generate_password_hash("student123"), "Test Student", "10th Grade", "female", "CataCuti Test School", "student")
         )
     
     cursor.execute("SELECT COUNT(*) FROM content")
