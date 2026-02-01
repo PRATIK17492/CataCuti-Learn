@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+.env
+cata_cuti.db
+uploads/
+.DS_Store
+venv/
+*.log
+instance/
