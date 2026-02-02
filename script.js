@@ -1,6 +1,6 @@
 // ============================================
 // CataCuti App - Complete Learning Platform
-// Version: 2.0 with Automatic Sync
+// Version: 2.1 with Backend Sync
 // ============================================
 
 // Global Variables
@@ -29,11 +29,191 @@ let lastSyncTime = localStorage.getItem('catacutiLastSync') || 0;
 let syncInterval;
 
 // ============================================
-// CLOUD SYNC SYSTEM - Automatic between phones
+// BACKEND API SYNC SYSTEM
+// ============================================
+
+function initBackendSync() {
+    console.log('🚀 Initializing backend sync system...');
+    
+    // Load data from backend on startup
+    loadFromBackend();
+    
+    // Start periodic sync with backend
+    syncInterval = setInterval(() => {
+        syncToBackend();
+        if (currentUser && currentUser.isAdmin) {
+            syncAdminContentToBackend();
+        }
+    }, SYNC_INTERVAL);
+    
+    // Sync when app becomes visible
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) {
+            console.log('📱 App visible, syncing with backend...');
+            loadFromBackend();
+        }
+    });
+    
+    console.log('✅ Backend sync system initialized');
+}
+
+async function loadFromBackend() {
+    try {
+        console.log('📡 Loading content from backend...');
+        
+        // Fetch content from backend API
+        const response = await fetch('/api/content');
+        
+        if (!response.ok) {
+            throw new Error(`Backend error: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success && data.data) {
+            console.log(`✅ Loaded ${data.data.length} items from backend`);
+            
+            // Process backend content
+            data.data.forEach(backendItem => {
+                // Convert backend format to frontend format
+                const frontendChapter = {
+                    id: backendItem.id.toString(),
+                    title: backendItem.title,
+                    description: backendItem.description || '',
+                    subjectId: backendItem.subject.toLowerCase(),
+                    difficulty: backendItem.difficulty || 'beginner',
+                    questions: 5, // Default value
+                    duration: 45, // Default value
+                    class: backendItem.classes?.split(',')[0] || 'All Classes',
+                    source: 'backend', // Mark as backend item
+                    createdAt: new Date(backendItem.created_at).getTime() || Date.now(),
+                    updatedAt: Date.now()
+                };
+                
+                // Check if already exists
+                const existingIndex = chapters.findIndex(ch => 
+                    ch.id === frontendChapter.id || 
+                    (ch.title === frontendChapter.title && ch.class === frontendChapter.class)
+                );
+                
+                if (existingIndex === -1) {
+                    // Add new chapter
+                    chapters.push(frontendChapter);
+                    console.log(`➕ Added backend chapter: ${frontendChapter.title}`);
+                } else {
+                    // Update existing chapter with backend data
+                    chapters[existingIndex] = {
+                        ...chapters[existingIndex],
+                        ...frontendChapter,
+                        source: 'backend'
+                    };
+                }
+            });
+            
+            // Save merged data
+            saveAllData();
+            
+            // Update UI if home screen is shown
+            if (currentUser && document.getElementById('app').innerHTML.includes('Welcome back')) {
+                showHomeScreen();
+            }
+        }
+    } catch (error) {
+        console.log('⚠️ Backend not available, using local storage only:', error.message);
+        // Continue with local data
+    }
+}
+
+async function syncToBackend() {
+    if (!currentUser) return;
+    
+    try {
+        // Sync user progress to backend
+        if (userProgress[currentUser.id]) {
+            const progressData = userProgress[currentUser.id];
+            
+            for (const chapterId in progressData) {
+                const chapterProgress = progressData[chapterId];
+                const chapter = chapters.find(ch => ch.id === chapterId);
+                
+                if (chapter) {
+                    await fetch('/api/progress', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            user_id: parseInt(currentUser.id),
+                            subject: chapter.subjectId,
+                            chapter: chapter.title,
+                            score: chapterProgress.score,
+                            completed: chapterProgress.completed ? 1 : 0
+                        })
+                    });
+                }
+            }
+        }
+        
+        console.log('✅ Progress synced to backend');
+    } catch (error) {
+        console.error('Backend sync error:', error);
+    }
+}
+
+async function syncAdminContentToBackend() {
+    if (!currentUser || !currentUser.isAdmin) return;
+    
+    try {
+        console.log('🔄 Syncing admin content to backend...');
+        
+        // Get admin's chapters
+        const adminChapters = chapters.filter(ch => 
+            (ch.class === currentUser.class || currentUser.isSuperAdmin) && 
+            (!ch.source || ch.source === 'local') // Only sync local/admin-created chapters
+        );
+        
+        for (const chapter of adminChapters) {
+            // Check if chapter already exists in backend
+            const checkResponse = await fetch(`/api/content?subject=${chapter.subjectId}`);
+            const checkData = await checkResponse.json();
+            
+            const exists = checkData.data?.some(item => 
+                item.title === chapter.title && 
+                item.classes?.includes(chapter.class)
+            );
+            
+            if (!exists) {
+                // Add to backend
+                await fetch('/api/content', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: chapter.title,
+                        description: chapter.description,
+                        subject: chapter.subjectId.charAt(0).toUpperCase() + chapter.subjectId.slice(1),
+                        chapter: `Chapter ${chapter.id}`,
+                        content_type: 'notes',
+                        difficulty: chapter.difficulty,
+                        classes: chapter.class,
+                        notes: chapter.description,
+                        created_at: new Date().toISOString()
+                    })
+                });
+                
+                console.log(`📤 Sent to backend: ${chapter.title}`);
+            }
+        }
+        
+        console.log('✅ Admin content synced to backend');
+    } catch (error) {
+        console.error('Admin backend sync error:', error);
+    }
+}
+
+// ============================================
+// CLOUD SYNC SYSTEM - Between devices
 // ============================================
 
 function initCloudSync() {
-    console.log('🔄 Initializing cloud sync system...');
+    console.log('☁️ Initializing cloud sync system...');
     
     // Generate unique device ID if not exists
     let deviceId = localStorage.getItem('catacutiDeviceId');
@@ -43,24 +223,13 @@ function initCloudSync() {
         console.log('📱 Generated device ID:', deviceId);
     }
     
-    // Load data from cloud on startup
-    loadFromCloud();
+    // Start backend sync system
+    initBackendSync();
     
-    // Start periodic sync
+    // Also maintain local cloud sync for non-admin data
     syncInterval = setInterval(syncToCloud, SYNC_INTERVAL);
     
-    // Sync when app becomes visible
-    document.addEventListener('visibilitychange', function() {
-        if (!document.hidden) {
-            console.log('📱 App became visible, syncing...');
-            loadFromCloud();
-        }
-    });
-    
-    // Sync on page load/unload
-    window.addEventListener('beforeunload', syncToCloud);
-    
-    console.log('✅ Cloud sync system initialized');
+    console.log('✅ Dual sync system (Backend + Cloud) initialized');
 }
 
 function syncToCloud() {
@@ -70,7 +239,7 @@ function syncToCloud() {
             data: {
                 users: users,
                 subjects: subjects,
-                chapters: chapters,
+                chapters: chapters.filter(ch => ch.source !== 'backend'), // Don't sync backend chapters
                 videos: videos,
                 questions: questions,
                 notes: notes,
@@ -93,7 +262,7 @@ function syncToCloud() {
         localStorage.setItem('catacutiLastSync', Date.now().toString());
         lastSyncTime = Date.now();
         
-        // Update sync status in UI if user is logged in
+        // Update sync status in UI
         if (currentUser && document.getElementById('app')) {
             updateSyncStatus();
         }
@@ -101,7 +270,7 @@ function syncToCloud() {
         console.log('✅ Data synced to cloud at', new Date().toLocaleTimeString());
         
     } catch (error) {
-        console.error('❌ Sync error:', error);
+        console.error('❌ Cloud sync error:', error);
         showNotification('Sync failed: ' + error.message, 'error');
     }
 }
@@ -122,7 +291,7 @@ function loadFromCloud() {
         if (cloudLastUpdate > localLastUpdate) {
             console.log('☁️ Loading newer data from cloud...');
             
-            // Merge cloud data with local data
+            // Merge cloud data with local data (backend items get priority)
             mergeCloudData(parsedData.data);
             
             // Save merged data
@@ -162,11 +331,11 @@ function mergeCloudData(cloudData) {
             if (!localItem) {
                 merged.push(cloudItem);
             } else {
-                // Keep newer item based on updatedAt or createdAt
-                const localTime = localItem.updatedAt || localItem.createdAt || 0;
-                const cloudTime = cloudItem.updatedAt || cloudItem.createdAt || 0;
+                // Priority: Backend > Cloud > Local
+                const isBackendItem = localItem.source === 'backend';
+                const isCloudItem = !cloudItem.source;
                 
-                if (cloudTime > localTime) {
+                if (!isBackendItem && isCloudItem) {
                     const index = merged.findIndex(item => item[idField] === cloudItem[idField]);
                     if (index !== -1) {
                         merged[index] = cloudItem;
@@ -244,11 +413,11 @@ function updateSyncStatus() {
             const statusDiv = document.createElement('div');
             statusDiv.id = 'syncStatus';
             statusDiv.className = 'sync-status synced';
-            statusDiv.innerHTML = `🔄 Synced ${new Date().toLocaleTimeString().slice(0, 5)}`;
+            statusDiv.innerHTML = `🔄 Backend Synced ${new Date().toLocaleTimeString().slice(0, 5)}`;
             header.appendChild(statusDiv);
         }
     } else if (syncStatus) {
-        syncStatus.innerHTML = `🔄 Synced ${new Date().toLocaleTimeString().slice(0, 5)}`;
+        syncStatus.innerHTML = `🔄 Backend Synced ${new Date().toLocaleTimeString().slice(0, 5)}`;
         syncStatus.className = 'sync-status synced';
     }
 }
@@ -301,7 +470,7 @@ function showNotification(message, type = 'info') {
 function initializeData() {
     console.log('🚀 Initializing CataCuti App...');
     
-    // Start cloud sync system
+    // Start dual sync system
     initCloudSync();
     
     // Initialize default classes
@@ -440,6 +609,11 @@ function login(email, password) {
         localStorage.setItem('catacutiCurrentUser', JSON.stringify(user));
         showNotification(`Welcome back, ${user.displayName}!`, 'success');
         showHomeScreen();
+        
+        // Load backend content when user logs in
+        setTimeout(() => {
+            loadFromBackend();
+        }, 1000);
     } else {
         showNotification('Invalid email or password.', 'error');
     }
@@ -527,10 +701,13 @@ function showLoginScreen() {
     document.getElementById('app').innerHTML = '';
 }
 
-function showHomeScreen() {
+async function showHomeScreen() {
     document.getElementById('loginModal').style.display = 'none';
     document.getElementById('adminModal').style.display = 'none';
     document.getElementById('classModal').style.display = 'none';
+    
+    // Always load backend content when showing home screen
+    await loadFromBackend();
     
     // Filter content by user's class
     const subjectChapters = chapters.filter(ch => 
@@ -574,6 +751,7 @@ function showHomeScreen() {
                                     <span>⏱️ ${chapter.duration} min</span>
                                     <span class="class-badge">${chapter.class}</span>
                                     <span class="difficulty-badge ${chapter.difficulty}">${chapter.difficulty}</span>
+                                    ${chapter.source === 'backend' ? '<span style="background:#28a745;color:white;padding:2px 6px;border-radius:10px;font-size:0.7rem;">🔄 Backend</span>' : ''}
                                 </div>
                                 ${userProgressData[chapter.id] ? 
                                     `<div class="progress-indicator">
@@ -839,13 +1017,15 @@ function showClassManagement() {
             <h3>🏫 Class Management & Sync</h3>
             
             <div class="sync-status-card">
-                <h4>🔄 Cloud Sync Status</h4>
-                <p><strong>Status:</strong> <span class="sync-indicator active">ACTIVE</span></p>
-                <p><strong>Last Sync:</strong> ${lastSyncTime ? new Date(parseInt(lastSyncTime)).toLocaleTimeString() : 'Never'}</p>
+                <h4>🔄 Dual Sync Status</h4>
+                <p><strong>Backend Sync:</strong> <span class="sync-indicator active">ACTIVE</span></p>
+                <p><strong>Cloud Sync:</strong> <span class="sync-indicator active">ACTIVE</span></p>
+                <p><strong>Last Backend Sync:</strong> ${lastSyncTime ? new Date(parseInt(lastSyncTime)).toLocaleTimeString() : 'Never'}</p>
                 <p><strong>Device ID:</strong> ${localStorage.getItem('catacutiDeviceId')}</p>
-                <p><strong>Sync Interval:</strong> Every 15 seconds</p>
+                <p><strong>Sync Intervals:</strong> Backend (15s) + Cloud (15s)</p>
                 <div style="display: flex; gap: 10px; margin-top: 15px;">
-                    <button onclick="manualSync()" class="streak-btn">🔄 Sync Now</button>
+                    <button onclick="forceBackendSync()" class="streak-btn">🔄 Sync Backend</button>
+                    <button onclick="manualSync()" class="secondary-btn">☁️ Sync Cloud</button>
                     <button onclick="forceSave()" class="secondary-btn">💾 Save All</button>
                 </div>
             </div>
@@ -930,10 +1110,19 @@ function removeClass(className) {
     showClassManagement();
 }
 
+function forceBackendSync() {
+    loadFromBackend();
+    if (currentUser && currentUser.isAdmin) {
+        syncAdminContentToBackend();
+    }
+    showNotification('Backend sync initiated!', 'success');
+    showClassManagement();
+}
+
 function manualSync() {
     syncToCloud();
     loadFromCloud();
-    showNotification('Manual sync completed!', 'success');
+    showNotification('Cloud sync completed!', 'success');
     showClassManagement();
 }
 
@@ -954,7 +1143,7 @@ function exportData() {
         appClasses: appClasses,
         userProgress: userProgress,
         exportedAt: new Date().toISOString(),
-        version: '2.0'
+        version: '2.1'
     };
     
     const dataStr = JSON.stringify(data, null, 2);
@@ -1076,7 +1265,7 @@ function showLiveClassForm() {
                             </div>
                             <button class="delete-btn" onclick="deleteLiveClass('${liveClass.id}')">Delete</button>
                         </div>
-                    `).join('')
+                    `).join('')}
                 }
             </div>
         </div>
@@ -1391,6 +1580,9 @@ function showQuizResults() {
     
     // Save everything
     saveAllData();
+    
+    // Also sync progress to backend
+    syncToBackend();
     
     document.querySelector('.quiz-content').innerHTML = `
         <div class="quiz-result">
@@ -1770,7 +1962,7 @@ function closeFileViewer() {
 }
 
 // ============================================
-// ADMIN PANEL
+// ADMIN PANEL - UPDATED WITH BACKEND SYNC
 // ============================================
 
 function showAdminPanel() {
@@ -1782,9 +1974,12 @@ function closeAdminPanel() {
     document.getElementById('adminModal').style.display = 'none';
 }
 
-function loadAdminContent(tab) {
+async function loadAdminContent(tab) {
     const adminContent = document.querySelector('.admin-content');
     const isSuperAdmin = currentUser.isSuperAdmin;
+    
+    // Always try to load from backend first
+    await loadFromBackend();
     
     let filteredChapters = isSuperAdmin ? chapters : chapters.filter(ch => ch.class === currentUser.class);
     let filteredVideos = isSuperAdmin ? videos : videos.filter(vid => vid.class === currentUser.class);
@@ -1804,7 +1999,7 @@ function loadAdminContent(tab) {
             </div>
             
             <div class="admin-header">
-                <h3>${isSuperAdmin ? 'All Classes' : currentUser.class} - Chapters</h3>
+                <h3>${isSuperAdmin ? 'All Classes' : currentUser.class} - Chapters (${filteredChapters.length})</h3>
                 <button class="add-btn" onclick="showAddForm('chapter')">➕ Add Chapter</button>
             </div>
             
@@ -1830,22 +2025,30 @@ function loadAdminContent(tab) {
                         </option>
                     `).join('')}
                 </select>
+                <div class="sync-option">
+                    <label>
+                        <input type="checkbox" id="syncToBackend" checked>
+                        Sync to Backend (All users will see this)
+                    </label>
+                </div>
                 <button class="streak-btn" onclick="addChapterAdmin()">Add Chapter</button>
             </div>
             
             <div class="content-list">
                 ${filteredChapters.map(chapter => {
                     const subject = subjects.find(s => s.id === chapter.subjectId);
+                    const isBackendChapter = chapter.source === 'backend';
                     return `
                         <div class="content-item">
                             <div>
-                                <strong>${chapter.title}</strong>
+                                <strong>${chapter.title} ${isBackendChapter ? '🔄' : ''}</strong>
                                 <p>${chapter.description}</p>
                                 <small>
                                     📚 ${subject?.name} • 
                                     ⏱️ ${chapter.duration} min • 
                                     📊 ${chapter.questions} questions • 
                                     🏫 ${chapter.class}
+                                    ${isBackendChapter ? ' • <span style="color:#28a745;">Backend Synced</span>' : ' • <span style="color:#6c757d;">Local Only</span>'}
                                 </small>
                             </div>
                             <div class="item-actions">
@@ -2034,7 +2237,7 @@ function showAddForm(type) {
     document.getElementById(`add${type.charAt(0).toUpperCase() + type.slice(1)}Form`).style.display = 'flex';
 }
 
-function addChapterAdmin() {
+async function addChapterAdmin() {
     const title = document.getElementById('chapterTitle').value;
     const description = document.getElementById('chapterDesc').value;
     const subjectId = document.getElementById('chapterSubject').value;
@@ -2042,6 +2245,7 @@ function addChapterAdmin() {
     const questionsCount = document.getElementById('chapterQuestions').value;
     const duration = document.getElementById('chapterDuration').value;
     const chapterClass = document.getElementById('chapterClass').value;
+    const syncToBackend = document.getElementById('syncToBackend')?.checked || true;
     
     if (!title || !description || !subjectId || !chapterClass) {
         showNotification('Please fill all fields', 'error');
@@ -2053,6 +2257,7 @@ function addChapterAdmin() {
         return;
     }
     
+    // Create chapter object
     const newChapter = {
         id: Date.now().toString(),
         title,
@@ -2066,11 +2271,100 @@ function addChapterAdmin() {
         updatedAt: Date.now()
     };
     
+    // Add to local storage immediately
     chapters.push(newChapter);
     saveAllData();
-    showNotification('Chapter added!', 'success');
+    
+    // Try to sync to backend if option is checked
+    if (syncToBackend) {
+        try {
+            const response = await fetch('/api/content', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    title: title,
+                    description: description,
+                    subject: subjectId.charAt(0).toUpperCase() + subjectId.slice(1),
+                    chapter: `Chapter ${newChapter.id}`,
+                    content_type: 'notes',
+                    difficulty: difficulty,
+                    classes: chapterClass,
+                    notes: description,
+                    created_at: new Date().toISOString()
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                // Update chapter with backend ID
+                const index = chapters.findIndex(ch => ch.id === newChapter.id);
+                if (index !== -1) {
+                    chapters[index].source = 'backend';
+                    chapters[index].backendId = data.data?.id;
+                    saveAllData();
+                }
+                showNotification('✅ Chapter added and synced to backend! All users will see it.', 'success');
+            } else {
+                showNotification('⚠️ Chapter added locally. Backend sync failed.', 'warning');
+            }
+        } catch (error) {
+            console.error('Backend error:', error);
+            showNotification('⚠️ Chapter added locally. Backend unavailable.', 'warning');
+        }
+    } else {
+        showNotification('Chapter added locally!', 'success');
+    }
+    
+    // Update UI
     loadAdminContent('chapters');
     document.getElementById('addChapterForm').style.display = 'none';
+    
+    // Refresh home screen
+    if (document.getElementById('app').innerHTML.includes('Welcome back')) {
+        showHomeScreen();
+    }
+}
+
+async function editChapter(chapterId) {
+    // Implementation for editing chapter
+    showNotification('Edit feature coming soon!', 'info');
+}
+
+async function deleteChapterAdmin(chapterId) {
+    const chapter = chapters.find(ch => ch.id === chapterId);
+    if (!chapter) return;
+    
+    if (!currentUser.isSuperAdmin && chapter.class !== currentUser.class) {
+        showNotification('Cannot delete this chapter', 'error');
+        return;
+    }
+    
+    if (confirm('Delete this chapter and all related questions/notes?')) {
+        // Remove from local storage
+        chapters = chapters.filter(ch => ch.id !== chapterId);
+        questions = questions.filter(q => q.chapterId !== chapterId);
+        notes = notes.filter(n => n.chapterId !== chapterId);
+        saveAllData();
+        
+        // Try to delete from backend if it was synced
+        if (chapter.source === 'backend' && chapter.backendId) {
+            try {
+                await fetch(`/api/content/${chapter.backendId}`, {
+                    method: 'DELETE'
+                });
+                showNotification('✅ Chapter deleted from backend too!', 'success');
+            } catch (error) {
+                showNotification('⚠️ Chapter deleted locally. Backend delete failed.', 'warning');
+            }
+        } else {
+            showNotification('Chapter deleted locally!', 'success');
+        }
+        
+        loadAdminContent('chapters');
+    }
 }
 
 function addVideoAdmin() {
@@ -2177,25 +2471,6 @@ function addSubjectAdmin() {
     showNotification('Subject added!', 'success');
     loadAdminContent('subjects');
     document.getElementById('addSubjectForm').style.display = 'none';
-}
-
-function deleteChapterAdmin(chapterId) {
-    const chapter = chapters.find(ch => ch.id === chapterId);
-    if (!chapter) return;
-    
-    if (!currentUser.isSuperAdmin && chapter.class !== currentUser.class) {
-        showNotification('Cannot delete this chapter', 'error');
-        return;
-    }
-    
-    if (confirm('Delete this chapter and all related questions/notes?')) {
-        chapters = chapters.filter(ch => ch.id !== chapterId);
-        questions = questions.filter(q => q.chapterId !== chapterId);
-        notes = notes.filter(n => n.chapterId !== chapterId);
-        saveAllData();
-        showNotification('Chapter deleted!', 'success');
-        loadAdminContent('chapters');
-    }
 }
 
 function deleteVideoAdmin(videoId) {
