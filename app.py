@@ -355,6 +355,73 @@ def get_content():
     except Exception as e:
         return create_response(error=str(e), status=500)
 
+@app.route('/api/content', methods=['POST'])
+def add_content():
+    try:
+        data = request.get_json()
+        if not data:
+            return create_response(error="No data provided", status=400)
+        
+        # Validate required fields
+        required_fields = ['title', 'subject', 'content_type']
+        for field in required_fields:
+            if not data.get(field):
+                return create_response(error=f"Missing required field: {field}", status=400)
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Insert new content
+        cursor.execute('''
+            INSERT INTO content (
+                title, description, subject, chapter, content_type, 
+                difficulty, classes, video_url, notes, files
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            data.get('title'),
+            data.get('description', ''),
+            data.get('subject'),
+            data.get('chapter', ''),
+            data.get('content_type'),
+            data.get('difficulty', 'beginner'),
+            data.get('classes', '6th Grade,7th Grade,8th Grade,9th Grade,10th Grade'),
+            data.get('video_url'),
+            data.get('notes'),
+            json.dumps(data.get('files')) if data.get('files') else None
+        ))
+        
+        content_id = cursor.lastrowid
+        
+        # Get the newly created content
+        cursor.execute("SELECT * FROM content WHERE id = ?", (content_id,))
+        content = cursor.fetchone()
+        
+        conn.commit()
+        conn.close()
+        
+        content_data = {
+            'id': content['id'],
+            'title': content['title'],
+            'description': content['description'],
+            'subject': content['subject'],
+            'chapter': content['chapter'],
+            'content_type': content['content_type'],
+            'difficulty': content['difficulty'],
+            'classes': content['classes'],
+            'video_url': content['video_url'],
+            'notes': content['notes'],
+            'files': json.loads(content['files']) if content['files'] else [],
+            'created_at': content['created_at']
+        }
+        
+        return create_response(
+            data=content_data,
+            message="Content added successfully"
+        )
+        
+    except Exception as e:
+        return create_response(error=str(e), status=500)
+
 @app.route('/api/content/<int:content_id>', methods=['GET'])
 def get_content_item(content_id):
     try:
